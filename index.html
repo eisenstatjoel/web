@@ -26,7 +26,7 @@
       <p class="muted">This runs in your browser for macOS stability. You can close this tab after success.</p>
       <div class="row">
         <button id="btn" type="button">Start Plaid Link</button>
-        <button id="close" class="secondary" type="button">Close tab</button>
+        <button id="close" class="secondary" type="button">Done</button>
       </div>
       <div id="status" class="status">Loading…</div>
       <p class="muted">Business: <code id="biz"></code></p>
@@ -167,7 +167,11 @@
         }
       }
 
-      closeBtn.addEventListener("click", () => window.close());
+      closeBtn.addEventListener("click", () => {
+        // Safari/Chrome generally block window.close() unless the tab was opened by script.
+        // This page is usually opened from the macOS app, so "close tab" won't work reliably.
+        setStatus("You can close this browser tab manually (Cmd+W), then return to Base.", "");
+      });
       btn.addEventListener("click", start);
 
       // Initial status
