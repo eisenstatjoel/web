@@ -1,6 +1,258 @@
-Connect bank (Plaid)
-This runs in your browser for macOS stability. You can close this tab after success.
-Start Plaid Link
-Done
-Loading…
-Business:
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Plaid Link</title>
+    <style>
+      body {
+        font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #f7f7f9;
+      }
+      .card {
+        max-width: 720px;
+        margin: 0 auto;
+        background: #fff;
+        border-radius: 14px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 12px 0;
+      }
+      p {
+        margin: 8px 0;
+        color: #333;
+        line-height: 1.35;
+      }
+      .muted {
+        color: #666;
+        font-size: 13px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 14px;
+      }
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+        background: #0b6cff;
+        color: #fff;
+      }
+      button.secondary {
+        background: #eef0f3;
+        color: #111;
+      }
+      code {
+        background: #f1f1f3;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .status {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #f1f5ff;
+        color: #113;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+      .error {
+        background: #fff1f1;
+        color: #611;
+      }
+      .ok {
+        background: #effaf1;
+        color: #143;
+      }
+    </style>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Connect bank (Plaid)</h1>
+      <p class="muted">This runs in your browser for macOS stability. You can close this tab after success.</p>
+      <div class="row">
+        <button id="btn" type="button">Start Plaid Link</button>
+        <button id="close" class="secondary" type="button">Done</button>
+      </div>
+      <div id="status" class="status">Loading…</div>
+      <p class="muted">Business: <code id="biz"></code></p>
+    </div>
+
+    <script>
+      // Hosted static page (Vercel). Calls Supabase Edge Functions using a Supabase session JWT:
+      //   .../index.html?business_id=<uuid>#access_token=<jwt>
+      // Fallback (some flows drop fragments):
+      //   .../index.html?business_id=<uuid>&access_token=<jwt>
+      //
+      // After successful exchange, returns to the macOS app via custom URL scheme:
+      //   base://plaid/connected?business_id=<uuid>&sync=1
+
+      const SUPABASE_URL = "https://seulnlrmwpfpjecqjczm.supabase.co";
+      const SUPABASE_ANON_KEY = "sb_publishable_tP5FPkkOV7kP_H3FjaiM3Q_LPrjUPwU";
+
+      const statusEl = document.getElementById("status");
+      const btn = document.getElementById("btn");
+      const closeBtn = document.getElementById("close");
+      const bizEl = document.getElementById("biz");
+      const NL = String.fromCharCode(10);
+
+      function setStatus(msg, kind) {
+        statusEl.textContent = msg;
+        statusEl.className = "status" + (kind ? " " + kind : "");
+      }
+
+      function getBusinessIdFromQuery() {
+        const url = new URL(window.location.href);
+        return (url.searchParams.get("business_id") || "").trim();
+      }
+
+      function getAccessTokenFromHash() {
+        const h = window.location.hash || "";
+        const params = new URLSearchParams(h.startsWith("#") ? h.slice(1) : h);
+        return (params.get("access_token") || "").trim();
+      }
+
+      function moveAccessTokenQueryToHashIfNeeded() {
+        try {
+          const existing = getAccessTokenFromHash();
+          if (existing) return;
+
+          const url = new URL(window.location.href);
+          const q = (url.searchParams.get("access_token") || "").trim();
+          if (!q) return;
+
+          window.location.hash = "access_token=" + encodeURIComponent(q);
+          url.searchParams.delete("access_token");
+          const cleaned = url.pathname + (url.search ? url.search : "") + window.location.hash;
+          window.history.replaceState(null, "", cleaned);
+        } catch (_) {}
+      }
+
+      function safeLocationDiagnostics() {
+        try {
+          const url = new URL(window.location.href);
+          const hasQueryToken = !!(url.searchParams.get("access_token") || "").trim();
+          const hasHashToken = !!getAccessTokenFromHash();
+          const queryKeys = Array.from(url.searchParams.keys()).sort();
+          const hashKeys = (() => {
+            const h = window.location.hash || "";
+            const params = new URLSearchParams(h.startsWith("#") ? h.slice(1) : h);
+            return Array.from(params.keys()).sort();
+          })();
+          return [
+            "Path: " + url.pathname,
+            "Query keys: " + (queryKeys.join(", ") || "(none)"),
+            "Hash keys: " + (hashKeys.join(", ") || "(none)"),
+            "Has query access_token: " + (hasQueryToken ? "yes" : "no"),
+            "Has hash access_token: " + (hasHashToken ? "yes" : "no"),
+          ].join(NL);
+        } catch (_) {
+          return "Diagnostics unavailable.";
+        }
+      }
+
+      async function callEdge(fnSlug, body) {
+        moveAccessTokenQueryToHashIfNeeded();
+        const accessToken = getAccessTokenFromHash();
+        if (!accessToken) throw new Error("Missing access_token. Reopen from the app.");
+
+        const res = await fetch(SUPABASE_URL + "/functions/v1/" + fnSlug, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: "Bearer " + accessToken,
+          },
+          body: JSON.stringify(body),
+        });
+
+        const text = await res.text();
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch (_) {}
+
+        if (!res.ok) {
+          const msg = json && (json.error || json.message) ? json.error || json.message : text;
+          throw new Error("HTTP " + res.status + ": " + msg);
+        }
+        return json || {};
+      }
+
+      async function start() {
+        const businessId = getBusinessIdFromQuery();
+        if (!businessId) {
+          setStatus("Missing business_id.", "error");
+          return;
+        }
+
+        try {
+          btn.disabled = true;
+          setStatus("Creating link token…");
+          const tok = await callEdge("plaid-create-link-token", { business_id: businessId });
+          const linkToken = tok && tok.link_token ? String(tok.link_token) : "";
+          if (!linkToken) throw new Error("No link_token returned.");
+
+          setStatus("Opening Plaid Link…");
+          const handler = Plaid.create({
+            token: linkToken,
+            onSuccess: async (public_token) => {
+              try {
+                setStatus("Exchanging token and saving connection…");
+                await callEdge("plaid-exchange-public-token", { business_id: businessId, public_token });
+                setStatus("Success! Returning to Base…", "ok");
+                window.location.href =
+                  "base://plaid/connected?business_id=" + encodeURIComponent(businessId) + "&sync=1";
+              } catch (e) {
+                setStatus(String(e && e.message ? e.message : e) + NL + NL + safeLocationDiagnostics(), "error");
+              } finally {
+                btn.disabled = false;
+              }
+            },
+            onExit: (err) => {
+              if (err) {
+                setStatus(
+                  "Plaid exited with an error: " +
+                    (err.error_message || err.display_message || err.error_code || "Unknown"),
+                  "error"
+                );
+              } else {
+                setStatus("Plaid closed.", "");
+              }
+              btn.disabled = false;
+            },
+          });
+          handler.open();
+        } catch (e) {
+          setStatus(String(e && e.message ? e.message : e) + NL + NL + safeLocationDiagnostics(), "error");
+          btn.disabled = false;
+        }
+      }
+
+      closeBtn.addEventListener("click", () => {
+        setStatus("Close this browser tab manually (Cmd+W), then return to Base.", "");
+      });
+
+      btn.addEventListener("click", start);
+
+      const biz = getBusinessIdFromQuery();
+      bizEl.textContent = biz || "(missing)";
+      moveAccessTokenQueryToHashIfNeeded();
+
+      if (getAccessTokenFromHash()) setStatus("Ready (signed in)." + NL + NL + safeLocationDiagnostics());
+      else setStatus("Ready (missing session). Reopen from the app." + NL + NL + safeLocationDiagnostics(), "error");
+    </script>
+  </body>
+</html>
