@@ -96,9 +96,6 @@
       // Fallback (some flows drop fragments):
       //   .../index.html?business_id=<uuid>&access_token=<jwt>
       //
-      // After successful exchange, returns to the macOS app via custom URL scheme:
-      //   base://plaid/connected?business_id=<uuid>&sync=1
-
       const SUPABASE_URL = "https://seulnlrmwpfpjecqjczm.supabase.co";
       const SUPABASE_ANON_KEY = "sb_publishable_tP5FPkkOV7kP_H3FjaiM3Q_LPrjUPwU";
 
@@ -212,9 +209,13 @@
               try {
                 setStatus("Exchanging token and saving connection…");
                 await callEdge("plaid-exchange-public-token", { business_id: businessId, public_token });
-                setStatus("Success! Returning to Base…", "ok");
-                window.location.href =
-                  "base://plaid/connected?business_id=" + encodeURIComponent(businessId) + "&sync=1";
+                setStatus(
+                  "Success! Bank linked." +
+                    NL +
+                    NL +
+                    "Next: close this browser tab (Cmd+W), return to Base, then tap “Sync now” (in the Plaid panel) or “Sync Plaid” (toolbar) to download transactions.",
+                  "ok"
+                );
               } catch (e) {
                 setStatus(String(e && e.message ? e.message : e) + NL + NL + safeLocationDiagnostics(), "error");
               } finally {
